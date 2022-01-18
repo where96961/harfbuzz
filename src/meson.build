@@ -298,19 +298,19 @@ if not has_ragel and get_option('ragel_subproject')
     has_ragel = true
 endif
 if not has_ragel
-  warning('You have to install ragel if you are going to develop HarfBuzz itself')
-else
-  ragel_helper = find_program('gen-ragel-artifacts.py')
-  foreach rl : hb_base_ragel_sources
-    hh = rl.split('.')[0] + '.hh'
-    custom_target('@0@'.format(hh),
-      build_by_default: true,
-      input: rl,
-      output: hh,
-      command: [ragel_helper, ragel, '@OUTPUT@', meson.current_source_dir(), '@INPUT@'],
-    )
-  endforeach
+  message('You have to install ragel if you are going to develop HarfBuzz itself')
+  ragel = 'error'
 endif
+ragel_helper = find_program('gen-ragel-artifacts.py')
+foreach rl : hb_base_ragel_sources
+  hh = rl.split('.')[0] + '.hh'
+  custom_target('@0@'.format(hh),
+    build_by_default: true,
+    input: rl,
+    output: hh,
+    command: [ragel_helper, ragel, '@OUTPUT@', meson.current_source_dir(), '@INPUT@'],
+  )
+endforeach
 
 custom_target('harfbuzz.cc',
   build_by_default: true,
