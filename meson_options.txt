@@ -36,7 +36,7 @@ option('icu_builtin', type: 'boolean', value: false,
   description: 'Don\'t separate ICU support as harfbuzz-icu module')
 option('experimental_api', type: 'boolean', value: false,
   description: 'Enable experimental APIs')
-option('ragel_subproject', type: 'boolean', value: false,
-  description: 'Build Ragel subproject if no suitable version is found')
+option('ragel', type: 'feature', value: 'auto',
+  description: 'Whether to regenerate ragel sources as needed')
 option('fuzzer_ldflags', type: 'string',
   description: 'Extra LDFLAGS used during linking of fuzzing binaries')

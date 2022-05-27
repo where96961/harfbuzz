@@ -1,5 +1,6 @@
 project('ragel', 'c', 'cpp',
-  version : '6.10'
+  version : '6.10',
+  meson_version: '>=0.46.0',
 )
 
 conf = configuration_data()
@@ -56,3 +57,5 @@ ragel = executable(
   include_directories : ['aapl', 'ragel'],
   install : true,
 )
+
+meson.override_find_program('ragel', ragel)
