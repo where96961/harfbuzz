@@ -49,6 +49,7 @@ namespace OT {
 struct COLR;
 
 struct Paint;
+struct PaintTemplateInstance;
 
 struct hb_paint_context_t :
        hb_dispatch_context_t<hb_paint_context_t>
@@ -66,9 +67,11 @@ public:
   hb_paint_funcs_t *funcs;
   void *data;
   hb_font_t *font;
+  hb_codepoint_t gid = HB_CODEPOINT_INVALID;
   unsigned int palette_index;
   hb_color_t foreground;
   VarStoreInstancer &instancer;
+  hb_vector_t<const PaintTemplateInstance *> template_stack;
   int depth_left = HB_MAX_NESTING_LEVEL;
   int edge_count = HB_COLRV1_MAX_EDGE_COUNT;
 
@@ -76,6 +79,7 @@ public:
 		      hb_paint_funcs_t *funcs_,
 		      void *data_,
                       hb_font_t *font_,
+		      hb_codepoint_t gid_,
                       unsigned int palette_,
                       hb_color_t foreground_,
 		      VarStoreInstancer &instancer_) :
@@ -83,6 +87,7 @@ public:
     funcs (funcs_),
     data (data_),
     font (font_),
+    gid (gid_),
     palette_index (palette_),
     foreground (foreground_),
     instancer (instancer_)
@@ -158,6 +163,7 @@ struct hb_colrv1_closure_context_t :
   { palette_indices->add (palette_index); }
 
   public:
+  hb_codepoint_t gid = HB_CODEPOINT_INVALID;
   const void *base;
   hb_set_t visited_paint;
   hb_set_t *glyphs;
@@ -176,6 +182,8 @@ struct hb_colrv1_closure_context_t :
                           palette_indices (palette_indices_),
                           nesting_level_left (nesting_level_left_)
   {}
+
+  void set_gid (hb_codepoint_t gid_) { gid = gid_; }
 };
 
 struct LayerRecord
@@ -1476,6 +1484,170 @@ struct PaintComposite
   DEFINE_SIZE_STATIC (8);
 };
 
+struct PaintTemplateInstance
+{
+  void closurev1 (hb_colrv1_closure_context_t* c) const;
+
+  bool subset (hb_subset_context_t *c,
+               const VarStoreInstancer &instancer) const
+  {
+    TRACE_SUBSET (this);
+    auto *out = c->serializer->embed (this);
+    if (unlikely (!out)) return_trace (false);
+
+    if (unlikely (!out->templatePaint.serialize_subset (c, templatePaint, this, instancer)))
+      return_trace (false);
+
+    for (auto _ : hb_zip (arguments, out->arguments.writer ()))
+    {
+      const auto &inPaint = _.first;
+      auto &outPaint = _.second;
+
+      if (unlikely (!outPaint.serialize_subset (c, inPaint, this, instancer)))
+	return_trace (false);
+    }
+
+    return_trace (true);
+  }
+
+  bool sanitize (hb_sanitize_context_t *c) const
+  {
+    TRACE_SANITIZE (this);
+    return_trace (c->check_struct (this) &&
+		  templatePaint.sanitize (c, this) &&
+		  arguments.sanitize (c, this));
+  }
+
+  void paint_glyph (hb_paint_context_t *c) const
+  {
+    c->template_stack.push (this);
+    c->recurse (this+templatePaint);
+    c->template_stack.pop ();
+  }
+
+  HBUINT8		format; /* format = 33 */
+  Offset24To<Paint>	templatePaint; /* Offset (from beginning of PaintTemplateInstance table) to Paint subtable. */
+  ArrayOf<Offset24To<Paint>, HBUINT8>
+			arguments; /* Array of offsets (from beginning of PaintTemplateInstance table) to Paint subtables. */
+  public:
+  DEFINE_SIZE_ARRAY_SIZED (5, arguments);
+};
+
+struct PaintTemplateArgument
+{
+  void closurev1 (hb_colrv1_closure_context_t* c) const {}
+
+  bool subset (hb_subset_context_t *c,
+               const VarStoreInstancer &instancer) const
+  {
+    TRACE_SUBSET (this);
+    return_trace (c->serializer->embed (this));
+  }
+
+  bool sanitize (hb_sanitize_context_t *c) const
+  {
+    TRACE_SANITIZE (this);
+    return_trace (c->check_struct (this));
+  }
+
+  void paint_glyph (hb_paint_context_t *c) const
+  {
+    auto *templatePaint = c->template_stack.tail ();
+    if (!templatePaint) return;
+    c->recurse (templatePaint+templatePaint->arguments[index]);
+  }
+
+  HBUINT8		format; /* format = 34 */
+  HBUINT8		index;
+  public:
+  DEFINE_SIZE_STATIC (2);
+};
+
+// Paint a non-COLR glyph with same root glyph ID, filled as indicated by paint.
+struct PaintGlyphSelf
+{
+  void closurev1 (hb_colrv1_closure_context_t* c) const;
+
+  bool subset (hb_subset_context_t *c,
+               const VarStoreInstancer &instancer) const
+  {
+    TRACE_SUBSET (this);
+    auto *out = c->serializer->embed (this);
+    if (unlikely (!out)) return_trace (false);
+
+    return_trace (out->paint.serialize_subset (c, paint, this, instancer));
+  }
+
+  bool sanitize (hb_sanitize_context_t *c) const
+  {
+    TRACE_SANITIZE (this);
+    return_trace (paint.sanitize (c, this));
+  }
+
+  void paint_glyph (hb_paint_context_t *c) const
+  {
+    c->funcs->push_inverse_root_transform (c->data, c->font);
+    c->funcs->push_clip_glyph (c->data, c->gid, c->font);
+    c->funcs->push_root_transform (c->data, c->font);
+    c->recurse (this+paint);
+    c->funcs->pop_transform (c->data);
+    c->funcs->pop_clip (c->data);
+    c->funcs->pop_transform (c->data);
+  }
+
+  HBUINT8		format; /* format = 35 */
+  Offset24To<Paint>	paint;  /* Offset (from beginning of PaintGlyph table) to Paint subtable. */
+  public:
+  DEFINE_SIZE_STATIC (4);
+};
+
+// Paint a non-COLR glyph with glyph ID relative to the root glyph ID, filled as indicated by paint.
+struct PaintGlyphDelta
+{
+  void closurev1 (hb_colrv1_closure_context_t* c) const;
+
+  bool subset (hb_subset_context_t *c,
+               const VarStoreInstancer &instancer) const
+  {
+    TRACE_SUBSET (this);
+    auto *out = c->serializer->embed (this);
+    if (unlikely (!out)) return_trace (false);
+
+#if 0
+    XXX
+    unsigned delta = ...
+    if (! c->serializer->check_assign (out->delta, c->plan->glyph_map->get (gid),
+                                       HB_SERIALIZE_ERROR_INT_OVERFLOW))
+      return_trace (false);
+#endif
+
+    return_trace (out->paint.serialize_subset (c, paint, this, instancer));
+  }
+
+  bool sanitize (hb_sanitize_context_t *c) const
+  {
+    TRACE_SANITIZE (this);
+    return_trace (c->check_struct (this) && paint.sanitize (c, this));
+  }
+
+  void paint_glyph (hb_paint_context_t *c) const
+  {
+    c->funcs->push_inverse_root_transform (c->data, c->font);
+    c->funcs->push_clip_glyph (c->data, (c->gid + delta) % 65536, c->font);
+    c->funcs->push_root_transform (c->data, c->font);
+    c->recurse (this+paint);
+    c->funcs->pop_transform (c->data);
+    c->funcs->pop_clip (c->data);
+    c->funcs->pop_transform (c->data);
+  }
+
+  HBUINT8		format; /* format = 10 */
+  Offset24To<Paint>	paint;  /* Offset (from beginning of PaintGlyph table) to Paint subtable. */
+  HBUINT16		delta;
+  public:
+  DEFINE_SIZE_STATIC (6);
+};
+
 struct ClipBoxData
 {
   int xMin, yMin, xMax, yMax;
@@ -1802,6 +1974,10 @@ struct Paint
     case 30: return_trace (c->dispatch (u.paintformat30, std::forward<Ts> (ds)...));
     case 31: return_trace (c->dispatch (u.paintformat31, std::forward<Ts> (ds)...));
     case 32: return_trace (c->dispatch (u.paintformat32, std::forward<Ts> (ds)...));
+    case 33: return_trace (c->dispatch (u.paintformat33, std::forward<Ts> (ds)...));
+    case 34: return_trace (c->dispatch (u.paintformat34, std::forward<Ts> (ds)...));
+    case 35: return_trace (c->dispatch (u.paintformat35, std::forward<Ts> (ds)...));
+    case 36: return_trace (c->dispatch (u.paintformat36, std::forward<Ts> (ds)...));
     default:return_trace (c->default_return_value ());
     }
   }
@@ -1841,6 +2017,10 @@ struct Paint
   NoVariable<PaintSkewAroundCenter>		paintformat30;
   Variable<PaintSkewAroundCenter>		paintformat31;
   PaintComposite				paintformat32;
+  PaintTemplateInstance				paintformat33;
+  PaintTemplateArgument				paintformat34;
+  PaintGlyphSelf				paintformat35;
+  PaintGlyphDelta				paintformat36;
   } u;
   public:
   DEFINE_SIZE_MIN (2);
@@ -2040,6 +2220,7 @@ struct COLR
       unsigned gid = baseglyph_paintrecord.glyphId;
       if (!glyphset->has (gid)) continue;
 
+      c.set_gid (gid);
       const Paint &paint = &baseglyph_paintrecords+baseglyph_paintrecord.paint;
       paint.dispatch (&c);
     }
@@ -2306,7 +2487,7 @@ struct COLR
     VarStoreInstancer instancer (&(this+varStore),
 	                         &(this+varIdxMap),
 	                         hb_array (font->coords, font->num_coords));
-    hb_paint_context_t c (this, funcs, data, font, palette_index, foreground, instancer);
+    hb_paint_context_t c (this, funcs, data, font, glyph, palette_index, foreground, instancer);
 
     if (version == 1)
     {

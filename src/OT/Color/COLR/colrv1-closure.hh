@@ -100,6 +100,23 @@ HB_INTERNAL void PaintComposite::closurev1 (hb_colrv1_closure_context_t* c) cons
   (this+src).dispatch (c);
   (this+backdrop).dispatch (c);
 }
+HB_INTERNAL void PaintTemplateInstance::closurev1 (hb_colrv1_closure_context_t* c) const
+{
+  (this+templatePaint).dispatch (c);
+  for (auto &argument : arguments)
+    (this+argument).dispatch (c);
+}
+HB_INTERNAL void PaintGlyphSelf::closurev1 (hb_colrv1_closure_context_t* c) const
+{
+  c->add_glyph (c->gid);
+  (this+paint).dispatch (c);
+}
+HB_INTERNAL void PaintGlyphDelta::closurev1 (hb_colrv1_closure_context_t* c) const
+{
+  c->add_glyph ((c->gid = delta) % 65536);
+  (this+paint).dispatch (c);
+}
+
 
 } /* namespace OT */
 
