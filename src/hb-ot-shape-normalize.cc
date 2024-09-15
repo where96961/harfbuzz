@@ -111,7 +111,7 @@ decompose (const hb_ot_shape_normalize_context_t *c, bool shortest, hb_codepoint
   hb_buffer_t * const buffer = c->buffer;
   hb_font_t * const font = c->font;
 
-  if (!c->decompose (c, ab, &a, &b) ||
+  if (!c->decompose (c->unicode, ab, &a, &b) ||
       (b && !font->get_nominal_glyph (b, &b_glyph)))
     return 0;
 
@@ -282,7 +282,7 @@ _hb_ot_shape_normalize (const hb_ot_shape_plan_t *plan,
   hb_ot_shape_normalization_mode_t mode = plan->shaper->normalization_preference;
   if (mode == HB_OT_SHAPE_NORMALIZATION_MODE_AUTO)
   {
-    if (plan->has_gpos_mark)
+    if (plan->has_mark)
       // https://github.com/harfbuzz/harfbuzz/issues/653#issuecomment-423905920
       //mode = HB_OT_SHAPE_NORMALIZATION_MODE_DECOMPOSED;
       mode = HB_OT_SHAPE_NORMALIZATION_MODE_COMPOSED_DIACRITICS;
@@ -436,7 +436,7 @@ _hb_ot_shape_normalize (const hb_ot_shape_plan_t *plan,
 	    (starter == buffer->out_len - 1 ||
 	     info_cc (buffer->prev()) < info_cc (buffer->cur())) &&
 	    /* And compose. */
-	    c.compose (&c,
+	    c.compose (c.unicode,
 		       buffer->out_info[starter].codepoint,
 		       buffer->cur().codepoint,
 		       &composed) &&
